@@ -59,6 +59,24 @@ st.markdown("""
     h2, h3 {
         color: #1e40af;
     }
+    .filter-indicator {
+        background: #dbeafe;
+        color: #1e40af;
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin: 5px 0;
+        font-size: 0.9em;
+        border-left: 3px solid #3b82f6;
+    }
+    .clear-filters-btn {
+        background: #ef4444;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: none;
+        cursor: pointer;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -6955,7 +6973,6 @@ def load_data():
 def parse_range(range_str):
     """Parsea un rango de números de onda"""
     try:
-        # Limpiar el string
         range_str = str(range_str).replace('ca.', '').replace('±', '').strip()
         
         if '-' in range_str:
@@ -7060,12 +7077,55 @@ def filter_by_frequency_range(df, min_freq, max_freq):
         return pd.DataFrame(results)
     return pd.DataFrame()
 
+def apply_combined_filters(df, filters):
+    """Aplica todos los filtros seleccionados de forma acumulativa"""
+    filtered = df.copy()
+    
+    # Filtro por búsqueda de texto
+    if filters.get('search_query'):
+        filtered = search_contains(filtered, filters['search_query'])
+    
+    # Filtro por familia
+    if filters.get('familia') and filters['familia'] != "Todas":
+        filtered = filtered[filtered['familia'] == filters['familia']]
+    
+    # Filtro por tipo de enlace
+    if filters.get('enlace') and filters['enlace'] != "Todos":
+        filtered = filter_by_bond_type(filtered, filters['enlace'])
+    
+    # Filtro por rango de frecuencia
+    if filters.get('rango_min') is not None and filters.get('rango_max') is not None:
+        # Solo aplicar si se modificó del valor por defecto
+        if filters['rango_min'] != 1000 or filters['rango_max'] != 2000:
+            filtered = filter_by_frequency_range(filtered, filters['rango_min'], filters['rango_max'])
+    
+    return filtered
+
+def get_active_filters_description(filters):
+    """Genera descripción de filtros activos"""
+    active = []
+    
+    if filters.get('search_query'):
+        active.append(f"Texto: '{filters['search_query']}'")
+    
+    if filters.get('familia') and filters['familia'] != "Todas":
+        active.append(f"Familia: {filters['familia']}")
+    
+    if filters.get('enlace') and filters['enlace'] != "Todos":
+        active.append(f"Enlace: {filters['enlace']}")
+    
+    if filters.get('rango_min') is not None and filters.get('rango_max') is not None:
+        if filters['rango_min'] != 1000 or filters['rango_max'] != 2000:
+            active.append(f"Rango: {filters['rango_min']}-{filters['rango_max']} cm⁻¹")
+    
+    return active
+
 # Cargar datos
 df = load_data()
 
 # INTERFAZ PRINCIPAL
 st.markdown("<h1>🔬 IR Spectroscopy Database</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #6b7280; font-size: 1.1em;'>Base de Datos Completa - 860 Bandas IR</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #6b7280; font-size: 1.1em;'>Base de Datos Completa - 860 Bandas IR - Filtros Combinados</p>", unsafe_allow_html=True)
 
 # Métricas
 col1, col2, col3, col4 = st.columns(4)
@@ -7082,33 +7142,42 @@ st.markdown("---")
 
 # Barra lateral con filtros
 with st.sidebar:
-    st.header("🔍 Búsqueda y Filtros")
+    st.header("🔍 Filtros de Búsqueda")
+    
+    st.info("💡 **Filtros combinados:** Todos los filtros se aplican simultáneamente. Combínalos para búsquedas precisas.")
+    
+    st.markdown("---")
     
     # Modo de búsqueda
     search_mode = st.radio(
         "Modo de búsqueda:",
         ["Búsqueda normal", "Búsqueda por 'Contiene'"],
-        help="Normal: busca número de onda exacto. Contiene: busca texto en todos los campos"
+        help="Normal: número de onda exacto. Contiene: busca texto en todos los campos"
     )
     
     # Búsqueda principal
     search_query = st.text_input(
-        "Buscar:",
-        placeholder="Número de onda (1720), familia, enlace, texto...",
-        help="Introduce número de onda, nombre de familia, tipo de enlace, o cualquier texto"
+        "🔎 Buscar texto:",
+        placeholder="Número de onda, nombre, grupo funcional...",
+        help="Busca en familia, grupo, asignación y observaciones",
+        key="search_input"
     )
     
     st.markdown("---")
     
     # Filtro por familia
-    st.subheader("🧪 Por Familia Química")
+    st.subheader("🧪 Familia Química")
     familias = ["Todas"] + sorted(df['familia'].unique().tolist())
-    familia_seleccionada = st.selectbox("Selecciona familia:", familias)
+    familia_seleccionada = st.selectbox(
+        "Selecciona:",
+        familias,
+        key="familia_select"
+    )
     
     st.markdown("---")
     
     # Filtro por tipo de enlace
-    st.subheader("🔗 Por Tipo de Enlace")
+    st.subheader("🔗 Tipo de Enlace")
     tipos_enlace = [
         "Todos",
         "C-C", "C-H", "C-O", "C=O", "C=C", "C≡C",
@@ -7119,144 +7188,174 @@ with st.sidebar:
         "C-F", "C-Cl", "C-Br", "C-I",
         "N=O", "NO₂"
     ]
-    enlace_seleccionado = st.selectbox("Selecciona tipo de enlace:", tipos_enlace)
+    enlace_seleccionado = st.selectbox(
+        "Selecciona:",
+        tipos_enlace,
+        key="enlace_select"
+    )
     
     st.markdown("---")
     
     # Filtro por rango
-    st.subheader("📊 Por Rango de Frecuencia (cm⁻¹)")
+    st.subheader("📊 Rango de Frecuencia")
     
     rango_valores = st.slider(
-        "Selecciona rango personalizado:",
+        "Selecciona rango (cm⁻¹):",
         min_value=400,
         max_value=4000,
         value=(1000, 2000),
         step=50,
-        help="Arrastra los extremos para ajustar el rango"
+        help="Arrastra para ajustar el rango",
+        key="rango_slider"
     )
     
     rango_min, rango_max = rango_valores
-    st.info(f"🔍 Rango: **{rango_min}** - **{rango_max}** cm⁻¹")
     
     st.markdown("---")
-    st.info("💡 **Tip:** Búsqueda 'Contiene' busca texto en todos los campos")
+    
+    # Botón para limpiar filtros
+    if st.button("🗑️ Limpiar todos los filtros", use_container_width=True):
+        st.session_state.search_input = ""
+        st.session_state.familia_select = "Todas"
+        st.session_state.enlace_select = "Todos"
+        st.session_state.rango_slider = (1000, 2000)
+        st.rerun()
+
+# Preparar filtros
+filters = {
+    'search_query': search_query if search_mode == "Búsqueda por 'Contiene'" or not search_query.isdigit() else None,
+    'familia': familia_seleccionada,
+    'enlace': enlace_seleccionado,
+    'rango_min': rango_min,
+    'rango_max': rango_max
+}
+
+# Mostrar filtros activos
+active_filters = get_active_filters_description(filters)
+if active_filters:
+    st.markdown("### 🎯 Filtros Activos")
+    for filter_desc in active_filters:
+        st.markdown(f"<div class='filter-indicator'>✓ {filter_desc}</div>", unsafe_allow_html=True)
+    st.markdown("---")
 
 # Aplicar filtros
-filtered_df = df.copy()
 mostrar_tabla = True
 
-# Filtro de búsqueda
-if search_query:
-    if search_query.isdigit() and search_mode == "Búsqueda normal":
-        mostrar_tabla = False
-        exact, nearby = search_by_wavenumber(df, int(search_query))
-        
-        if exact or nearby:
-            st.success(f"✅ {len(exact)} exactas y {len(nearby)} cercanas para {search_query} cm⁻¹")
-            
-            if exact:
-                st.subheader("🎯 Coincidencias Exactas")
-                for item in exact:
-                    with st.container():
-                        st.markdown(f"""
-                        <div class='result-card'>
-                            <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>
-                                <h3 style='margin: 0; color: #1e40af;'>{item['grupo']}</h3>
-                                <span class='family-badge'>{item['familia']}</span>
-                            </div>
-                            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;'>
-                                <div>
-                                    <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>ASIGNACIÓN</p>
-                                    <p style='margin: 5px 0; font-family: monospace; color: #1f2937;'>{item['asignacion']}</p>
-                                </div>
-                                <div>
-                                    <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>RANGO</p>
-                                    <p style='margin: 5px 0; font-family: monospace; color: #059669; font-weight: bold;'>{item['rango']} cm⁻¹</p>
-                                </div>
-                                <div>
-                                    <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>INTENSIDAD</p>
-                                    <p style='margin: 5px 0; font-family: monospace; color: #1f2937;'>{item['intensidad']}</p>
-                                </div>
-                            </div>
-                            {f"<p style='margin-top: 15px; padding: 10px; background: rgba(99, 102, 241, 0.1); border-left: 3px solid #6366f1; border-radius: 5px; color: #1f2937;'><strong>Observación:</strong> {item['observacion']}</p>" if item['observacion'] else ""}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        st.markdown("<br>", unsafe_allow_html=True)
-            
-            if nearby:
-                st.subheader("⚠️ Cercanas (±30 cm⁻¹)")
-                for item in nearby:
-                    with st.container():
-                        st.markdown(f"""
-                        <div class='result-card' style='opacity: 0.85;'>
-                            <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>
-                                <h3 style='margin: 0; color: #1e40af;'>{item['grupo']}</h3>
-                                <span class='family-badge'>{item['familia']}</span>
-                            </div>
-                            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;'>
-                                <div>
-                                    <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>ASIGNACIÓN</p>
-                                    <p style='margin: 5px 0; font-family: monospace; color: #1f2937;'>{item['asignacion']}</p>
-                                </div>
-                                <div>
-                                    <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>RANGO</p>
-                                    <p style='margin: 5px 0; font-family: monospace; color: #f59e0b; font-weight: bold;'>{item['rango']} cm⁻¹</p>
-                                </div>
-                                <div>
-                                    <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>INTENSIDAD</p>
-                                    <p style='margin: 5px 0; font-family: monospace; color: #1f2937;'>{item['intensidad']}</p>
-                                </div>
-                            </div>
-                            {f"<p style='margin-top: 15px; padding: 10px; background: rgba(99, 102, 241, 0.1); border-left: 3px solid #6366f1; border-radius: 5px; color: #1f2937;'><strong>Observación:</strong> {item['observacion']}</p>" if item['observacion'] else ""}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        st.markdown("<br>", unsafe_allow_html=True)
-        else:
-            st.warning(f"⚠️ No se encontraron bandas para {search_query} cm⁻¹")
+# Caso especial: búsqueda por número de onda exacto
+if search_query and search_query.isdigit() and search_mode == "Búsqueda normal":
+    mostrar_tabla = False
+    
+    # Aplicar otros filtros primero
+    temp_filters = filters.copy()
+    temp_filters['search_query'] = None
+    pre_filtered = apply_combined_filters(df, temp_filters)
+    
+    # Luego buscar por número de onda en el conjunto filtrado
+    exact, nearby = search_by_wavenumber(pre_filtered, int(search_query))
+    
+    total_results = len(exact) + len(nearby)
+    
+    if active_filters:
+        st.success(f"✅ {len(exact)} exactas y {len(nearby)} cercanas para {search_query} cm⁻¹ (con {len(active_filters)} filtro(s) aplicado(s))")
     else:
-        # Búsqueda por texto (normal o "contiene")
-        filtered_df = search_contains(df, search_query)
-        mode_text = "que contienen" if search_mode == "Búsqueda por 'Contiene'" else "para"
-        st.info(f"📊 {len(filtered_df)} resultados {mode_text} '{search_query}'")
+        st.success(f"✅ {len(exact)} exactas y {len(nearby)} cercanas para {search_query} cm⁻¹")
+    
+    if exact:
+        st.subheader("🎯 Coincidencias Exactas")
+        for item in exact:
+            with st.container():
+                st.markdown(f"""
+                <div class='result-card'>
+                    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>
+                        <h3 style='margin: 0; color: #1e40af;'>{item['grupo']}</h3>
+                        <span class='family-badge'>{item['familia']}</span>
+                    </div>
+                    <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;'>
+                        <div>
+                            <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>ASIGNACIÓN</p>
+                            <p style='margin: 5px 0; font-family: monospace; color: #1f2937;'>{item['asignacion']}</p>
+                        </div>
+                        <div>
+                            <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>RANGO</p>
+                            <p style='margin: 5px 0; font-family: monospace; color: #059669; font-weight: bold;'>{item['rango']} cm⁻¹</p>
+                        </div>
+                        <div>
+                            <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>INTENSIDAD</p>
+                            <p style='margin: 5px 0; font-family: monospace; color: #1f2937;'>{item['intensidad']}</p>
+                        </div>
+                    </div>
+                    {f"<p style='margin-top: 15px; padding: 10px; background: rgba(99, 102, 241, 0.1); border-left: 3px solid #6366f1; border-radius: 5px; color: #1f2937;'><strong>Observación:</strong> {item['observacion']}</p>" if item['observacion'] else ""}
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
+    
+    if nearby:
+        st.subheader("⚠️ Cercanas (±30 cm⁻¹)")
+        for item in nearby:
+            with st.container():
+                st.markdown(f"""
+                <div class='result-card' style='opacity: 0.85;'>
+                    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>
+                        <h3 style='margin: 0; color: #1e40af;'>{item['grupo']}</h3>
+                        <span class='family-badge'>{item['familia']}</span>
+                    </div>
+                    <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;'>
+                        <div>
+                            <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>ASIGNACIÓN</p>
+                            <p style='margin: 5px 0; font-family: monospace; color: #1f2937;'>{item['asignacion']}</p>
+                        </div>
+                        <div>
+                            <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>RANGO</p>
+                            <p style='margin: 5px 0; font-family: monospace; color: #f59e0b; font-weight: bold;'>{item['rango']} cm⁻¹</p>
+                        </div>
+                        <div>
+                            <p style='color: #6b7280; font-size: 0.85em; margin: 0;'>INTENSIDAD</p>
+                            <p style='margin: 5px 0; font-family: monospace; color: #1f2937;'>{item['intensidad']}</p>
+                        </div>
+                    </div>
+                    {f"<p style='margin-top: 15px; padding: 10px; background: rgba(99, 102, 241, 0.1); border-left: 3px solid #6366f1; border-radius: 5px; color: #1f2937;'><strong>Observación:</strong> {item['observacion']}</p>" if item['observacion'] else ""}
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
+    
+    if not exact and not nearby:
+        st.warning(f"⚠️ No se encontraron bandas para {search_query} cm⁻¹ con los filtros aplicados")
 
-# Filtro por familia
-elif familia_seleccionada != "Todas":
-    filtered_df = df[df['familia'] == familia_seleccionada]
-    st.info(f"🧪 {len(filtered_df)} bandas de {familia_seleccionada}")
-
-# Filtro por tipo de enlace
-elif enlace_seleccionado != "Todos":
-    filtered_df = filter_by_bond_type(df, enlace_seleccionado)
-    st.info(f"🔗 {len(filtered_df)} bandas con enlace {enlace_seleccionado}")
-
-# Filtro por rango de frecuencia
-elif rango_min != 1000 or rango_max != 2000:
-    filtered_df = filter_by_frequency_range(df, rango_min, rango_max)
-    st.info(f"📊 {len(filtered_df)} bandas entre {rango_min} y {rango_max} cm⁻¹")
+else:
+    # Aplicar filtros combinados
+    filtered_df = apply_combined_filters(df, filters)
+    
+    # Mostrar información de resultados
+    if len(active_filters) > 0:
+        st.info(f"📊 **{len(filtered_df)} bandas** encontradas con **{len(active_filters)} filtro(s)** combinado(s)")
+    else:
+        st.info(f"📊 Mostrando todas las **{len(filtered_df)} bandas** de la base de datos")
 
 # Mostrar tabla
-if mostrar_tabla and len(filtered_df) > 0:
-    st.dataframe(
-        filtered_df[['familia', 'grupo', 'asignacion', 'rango', 'intensidad', 'observacion']],
-        use_container_width=True,
-        height=600
-    )
-    
-    csv = filtered_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Descargar resultados CSV",
-        data=csv,
-        file_name='ir_spectroscopy_results.csv',
-        mime='text/csv',
-    )
-elif mostrar_tabla:
-    st.warning("⚠️ No se encontraron resultados")
+if mostrar_tabla:
+    if len(filtered_df) > 0:
+        st.dataframe(
+            filtered_df[['familia', 'grupo', 'asignacion', 'rango', 'intensidad', 'observacion']],
+            use_container_width=True,
+            height=600
+        )
+        
+        csv = filtered_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Descargar resultados CSV",
+            data=csv,
+            file_name='ir_spectroscopy_results.csv',
+            mime='text/csv',
+        )
+    else:
+        st.warning("⚠️ No se encontraron resultados con los filtros aplicados")
+        st.info("💡 Intenta ajustar o eliminar algunos filtros para obtener más resultados")
 
 # Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #6b7280; padding: 20px;'>
-    <p><strong>IR Spectroscopy Database</strong> - 860 bandas completas de 24 tablas</p>
+    <p><strong>IR Spectroscopy Database</strong> - 860 bandas completas con filtros combinados</p>
     <p style='font-size: 0.9em;'>Base de datos IR profesional - Enero 2026</p>
 </div>
 """, unsafe_allow_html=True)
