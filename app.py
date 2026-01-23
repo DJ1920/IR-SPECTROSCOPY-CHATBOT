@@ -68,14 +68,18 @@ st.markdown("""
         font-size: 0.9em;
         border-left: 3px solid #3b82f6;
     }
-    .clear-filters-btn {
-        background: #ef4444;
-        color: white;
-        padding: 10px 20px;
+    .exclusion-indicator {
+        background: #fee2e2;
+        color: #991b1b;
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin: 5px 0;
+        font-size: 0.9em;
+        border-left: 3px solid #ef4444;
+    }
+    .stExpander {
+        background-color: #f9fafb;
         border-radius: 8px;
-        border: none;
-        cursor: pointer;
-        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -7077,10 +7081,39 @@ def filter_by_frequency_range(df, min_freq, max_freq):
         return pd.DataFrame(results)
     return pd.DataFrame()
 
-def apply_combined_filters(df, filters):
-    """Aplica todos los filtros seleccionados de forma acumulativa"""
+def exclude_frequency_ranges(df, exclude_ranges):
+    """Excluir bandas en rangos específicos"""
+    if not exclude_ranges:
+        return df
+    
+    results = []
+    
+    for idx, row in df.iterrows():
+        range_min, range_max = parse_range(row['rango'])
+        if range_min is None:
+            results.append(row)
+            continue
+        
+        # Verificar si la banda NO está en ningún rango excluido
+        excluded = False
+        for exc_min, exc_max in exclude_ranges:
+            # Si hay solapamiento con el rango excluido, descartar
+            if (range_min <= exc_max and range_max >= exc_min):
+                excluded = True
+                break
+        
+        if not excluded:
+            results.append(row)
+    
+    if results:
+        return pd.DataFrame(results)
+    return pd.DataFrame()
+
+def apply_combined_filters(df, filters, exclusions):
+    """Aplica todos los filtros de inclusión y exclusión"""
     filtered = df.copy()
     
+    # FILTROS DE INCLUSIÓN
     # Filtro por búsqueda de texto
     if filters.get('search_query'):
         filtered = search_contains(filtered, filters['search_query'])
@@ -7095,37 +7128,68 @@ def apply_combined_filters(df, filters):
     
     # Filtro por rango de frecuencia
     if filters.get('rango_min') is not None and filters.get('rango_max') is not None:
-        # Solo aplicar si se modificó del valor por defecto
         if filters['rango_min'] != 1000 or filters['rango_max'] != 2000:
             filtered = filter_by_frequency_range(filtered, filters['rango_min'], filters['rango_max'])
     
+    # FILTROS DE EXCLUSIÓN
+    # Excluir familias
+    if exclusions.get('familias'):
+        for familia in exclusions['familias']:
+            filtered = filtered[filtered['familia'] != familia]
+    
+    # Excluir enlaces
+    if exclusions.get('enlaces'):
+        for enlace in exclusions['enlaces']:
+            # Excluir bandas que contengan ese tipo de enlace
+            temp_df = filter_by_bond_type(filtered, enlace)
+            filtered = filtered[~filtered.index.isin(temp_df.index)]
+    
+    # Excluir rangos de frecuencia
+    if exclusions.get('rangos_frecuencia'):
+        filtered = exclude_frequency_ranges(filtered, exclusions['rangos_frecuencia'])
+    
     return filtered
 
-def get_active_filters_description(filters):
+def get_active_filters_description(filters, exclusions):
     """Genera descripción de filtros activos"""
-    active = []
+    active_inclusion = []
+    active_exclusion = []
     
+    # Filtros de inclusión
     if filters.get('search_query'):
-        active.append(f"Texto: '{filters['search_query']}'")
+        active_inclusion.append(f"Texto: '{filters['search_query']}'")
     
     if filters.get('familia') and filters['familia'] != "Todas":
-        active.append(f"Familia: {filters['familia']}")
+        active_inclusion.append(f"Familia: {filters['familia']}")
     
     if filters.get('enlace') and filters['enlace'] != "Todos":
-        active.append(f"Enlace: {filters['enlace']}")
+        active_inclusion.append(f"Enlace: {filters['enlace']}")
     
     if filters.get('rango_min') is not None and filters.get('rango_max') is not None:
         if filters['rango_min'] != 1000 or filters['rango_max'] != 2000:
-            active.append(f"Rango: {filters['rango_min']}-{filters['rango_max']} cm⁻¹")
+            active_inclusion.append(f"Rango: {filters['rango_min']}-{filters['rango_max']} cm⁻¹")
     
-    return active
+    # Filtros de exclusión
+    if exclusions.get('familias'):
+        for familia in exclusions['familias']:
+            active_exclusion.append(f"Familia: {familia}")
+    
+    if exclusions.get('enlaces'):
+        for enlace in exclusions['enlaces']:
+            active_exclusion.append(f"Enlace: {enlace}")
+    
+    if exclusions.get('rangos_frecuencia'):
+        for rango_min, rango_max in exclusions['rangos_frecuencia']:
+            active_exclusion.append(f"Rango: {rango_min}-{rango_max} cm⁻¹")
+    
+    return active_inclusion, active_exclusion
 
 # Cargar datos
 df = load_data()
 
 # INTERFAZ PRINCIPAL
 st.markdown("<h1>🔬 IR Spectroscopy Database</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #6b7280; font-size: 1.1em;'>Base de Datos Completa - 860 Bandas IR - Filtros Combinados</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #6b7280; font-size: 1.1em;'>Base de Datos Completa - 860 Bandas IR - Filtros de Inclusión y Exclusión</p>", unsafe_allow_html=True)
 
 # Métricas
 col1, col2, col3, col4 = st.columns(4)
@@ -7144,15 +7208,19 @@ st.markdown("---")
 with st.sidebar:
     st.header("🔍 Filtros de Búsqueda")
     
-    st.info("💡 **Filtros combinados:** Todos los filtros se aplican simultáneamente. Combínalos para búsquedas precisas.")
+    st.info("💡 **Filtros combinados:** Incluye lo que quieres buscar y excluye lo que no necesitas.")
     
     st.markdown("---")
+    
+    # === SECCIÓN DE INCLUSIÓN ===
+    st.markdown("### ✅ Incluir (Buscar)")
     
     # Modo de búsqueda
     search_mode = st.radio(
         "Modo de búsqueda:",
         ["Búsqueda normal", "Búsqueda por 'Contiene'"],
-        help="Normal: número de onda exacto. Contiene: busca texto en todos los campos"
+        help="Normal: número de onda exacto. Contiene: busca texto en todos los campos",
+        key="search_mode"
     )
     
     # Búsqueda principal
@@ -7163,21 +7231,15 @@ with st.sidebar:
         key="search_input"
     )
     
-    st.markdown("---")
-    
     # Filtro por familia
-    st.subheader("🧪 Familia Química")
     familias = ["Todas"] + sorted(df['familia'].unique().tolist())
     familia_seleccionada = st.selectbox(
-        "Selecciona:",
+        "🧪 Familia:",
         familias,
         key="familia_select"
     )
     
-    st.markdown("---")
-    
     # Filtro por tipo de enlace
-    st.subheader("🔗 Tipo de Enlace")
     tipos_enlace = [
         "Todos",
         "C-C", "C-H", "C-O", "C=O", "C=C", "C≡C",
@@ -7189,23 +7251,18 @@ with st.sidebar:
         "N=O", "NO₂"
     ]
     enlace_seleccionado = st.selectbox(
-        "Selecciona:",
+        "🔗 Enlace:",
         tipos_enlace,
         key="enlace_select"
     )
     
-    st.markdown("---")
-    
     # Filtro por rango
-    st.subheader("📊 Rango de Frecuencia")
-    
     rango_valores = st.slider(
-        "Selecciona rango (cm⁻¹):",
+        "📊 Rango (cm⁻¹):",
         min_value=400,
         max_value=4000,
         value=(1000, 2000),
         step=50,
-        help="Arrastra para ajustar el rango",
         key="rango_slider"
     )
     
@@ -7213,17 +7270,73 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # === SECCIÓN DE EXCLUSIÓN ===
+    with st.expander("❌ Excluir (Filtros de exclusión)", expanded=False):
+        st.markdown("**Elimina bandas específicas de los resultados**")
+        
+        # Excluir familias
+        familias_excluir = st.multiselect(
+            "🚫 Excluir familias:",
+            options=sorted(df['familia'].unique().tolist()),
+            help="Las familias seleccionadas NO aparecerán en los resultados",
+            key="familias_excluir"
+        )
+        
+        # Excluir enlaces
+        enlaces_excluir = st.multiselect(
+            "🚫 Excluir enlaces:",
+            options=[e for e in tipos_enlace if e != "Todos"],
+            help="Las bandas con estos enlaces NO aparecerán",
+            key="enlaces_excluir"
+        )
+        
+        # Excluir rangos de frecuencia
+        st.markdown("**🚫 Excluir rangos de frecuencia:**")
+        
+        num_rangos_excluir = st.number_input(
+            "Número de rangos a excluir:",
+            min_value=0,
+            max_value=5,
+            value=0,
+            step=1,
+            key="num_rangos_excluir"
+        )
+        
+        rangos_excluir = []
+        for i in range(int(num_rangos_excluir)):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                min_exc = st.number_input(
+                    f"Mín {i+1}:",
+                    min_value=400,
+                    max_value=4000,
+                    value=1500,
+                    step=50,
+                    key=f"exc_min_{i}"
+                )
+            with col_b:
+                max_exc = st.number_input(
+                    f"Máx {i+1}:",
+                    min_value=400,
+                    max_value=4000,
+                    value=1600,
+                    step=50,
+                    key=f"exc_max_{i}"
+                )
+            rangos_excluir.append((min_exc, max_exc))
+    
+    st.markdown("---")
+    
     # Botón para limpiar filtros
     if st.button("🗑️ Limpiar todos los filtros", use_container_width=True):
-        # Limpiar session_state
-        if 'search_input' in st.session_state:
-            del st.session_state['search_input']
-        if 'familia_select' in st.session_state:
-            del st.session_state['familia_select']
-        if 'enlace_select' in st.session_state:
-            del st.session_state['enlace_select']
-        if 'rango_slider' in st.session_state:
-            del st.session_state['rango_slider']
+        # Limpiar filtros de inclusión
+        keys_to_clear = [
+            'search_input', 'familia_select', 'enlace_select', 'rango_slider',
+            'familias_excluir', 'enlaces_excluir', 'num_rangos_excluir'
+        ]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
         st.rerun()
 
 # Preparar filtros
@@ -7235,12 +7348,28 @@ filters = {
     'rango_max': rango_max
 }
 
+exclusions = {
+    'familias': st.session_state.get('familias_excluir', []),
+    'enlaces': st.session_state.get('enlaces_excluir', []),
+    'rangos_frecuencia': rangos_excluir if rangos_excluir else []
+}
+
 # Mostrar filtros activos
-active_filters = get_active_filters_description(filters)
-if active_filters:
+active_inclusion, active_exclusion = get_active_filters_description(filters, exclusions)
+
+if active_inclusion or active_exclusion:
     st.markdown("### 🎯 Filtros Activos")
-    for filter_desc in active_filters:
-        st.markdown(f"<div class='filter-indicator'>✓ {filter_desc}</div>", unsafe_allow_html=True)
+    
+    if active_inclusion:
+        st.markdown("**✅ Incluir:**")
+        for filter_desc in active_inclusion:
+            st.markdown(f"<div class='filter-indicator'>✓ {filter_desc}</div>", unsafe_allow_html=True)
+    
+    if active_exclusion:
+        st.markdown("**❌ Excluir:**")
+        for exclusion_desc in active_exclusion:
+            st.markdown(f"<div class='exclusion-indicator'>✗ {exclusion_desc}</div>", unsafe_allow_html=True)
+    
     st.markdown("---")
 
 # Aplicar filtros
@@ -7250,18 +7379,18 @@ mostrar_tabla = True
 if search_query and search_query.isdigit() and search_mode == "Búsqueda normal":
     mostrar_tabla = False
     
-    # Aplicar otros filtros primero
+    # Aplicar filtros (inclusión y exclusión)
     temp_filters = filters.copy()
     temp_filters['search_query'] = None
-    pre_filtered = apply_combined_filters(df, temp_filters)
+    pre_filtered = apply_combined_filters(df, temp_filters, exclusions)
     
-    # Luego buscar por número de onda en el conjunto filtrado
+    # Luego buscar por número de onda
     exact, nearby = search_by_wavenumber(pre_filtered, int(search_query))
     
-    total_results = len(exact) + len(nearby)
+    total_filters = len(active_inclusion) + len(active_exclusion)
     
-    if active_filters:
-        st.success(f"✅ {len(exact)} exactas y {len(nearby)} cercanas para {search_query} cm⁻¹ (con {len(active_filters)} filtro(s) aplicado(s))")
+    if total_filters > 0:
+        st.success(f"✅ {len(exact)} exactas y {len(nearby)} cercanas para {search_query} cm⁻¹ (con {total_filters} filtro(s) aplicado(s))")
     else:
         st.success(f"✅ {len(exact)} exactas y {len(nearby)} cercanas para {search_query} cm⁻¹")
     
@@ -7327,12 +7456,14 @@ if search_query and search_query.isdigit() and search_mode == "Búsqueda normal"
         st.warning(f"⚠️ No se encontraron bandas para {search_query} cm⁻¹ con los filtros aplicados")
 
 else:
-    # Aplicar filtros combinados
-    filtered_df = apply_combined_filters(df, filters)
+    # Aplicar filtros combinados (inclusión + exclusión)
+    filtered_df = apply_combined_filters(df, filters, exclusions)
     
     # Mostrar información de resultados
-    if len(active_filters) > 0:
-        st.info(f"📊 **{len(filtered_df)} bandas** encontradas con **{len(active_filters)} filtro(s)** combinado(s)")
+    total_filters = len(active_inclusion) + len(active_exclusion)
+    
+    if total_filters > 0:
+        st.info(f"📊 **{len(filtered_df)} bandas** encontradas ({len(active_inclusion)} inclusión + {len(active_exclusion)} exclusión)")
     else:
         st.info(f"📊 Mostrando todas las **{len(filtered_df)} bandas** de la base de datos")
 
@@ -7360,7 +7491,7 @@ if mostrar_tabla:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #6b7280; padding: 20px;'>
-    <p><strong>IR Spectroscopy Database</strong> - 860 bandas completas con filtros combinados</p>
+    <p><strong>IR Spectroscopy Database</strong> - 860 bandas con filtros de inclusión y exclusión</p>
     <p style='font-size: 0.9em;'>Base de datos IR profesional - Enero 2026</p>
 </div>
 """, unsafe_allow_html=True)
