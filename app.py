@@ -7215,10 +7215,15 @@ with st.sidebar:
     
     # Botón para limpiar filtros
     if st.button("🗑️ Limpiar todos los filtros", use_container_width=True):
-        st.session_state.search_input = ""
-        st.session_state.familia_select = "Todas"
-        st.session_state.enlace_select = "Todos"
-        st.session_state.rango_slider = (1000, 2000)
+        # Limpiar session_state
+        if 'search_input' in st.session_state:
+            del st.session_state['search_input']
+        if 'familia_select' in st.session_state:
+            del st.session_state['familia_select']
+        if 'enlace_select' in st.session_state:
+            del st.session_state['enlace_select']
+        if 'rango_slider' in st.session_state:
+            del st.session_state['rango_slider']
         st.rerun()
 
 # Preparar filtros
